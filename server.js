@@ -15,6 +15,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// CORS 허용 — Shopify 테마와 모바일 접근 모두 허용
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 const SHOP_DOMAIN = process.env.SHOP_DOMAIN;                         // 예: hangaweemarket.com 또는 3abf38-d9.myshopify.com
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;         // 커스텀 앱 토큰
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-10";
@@ -318,7 +327,12 @@ app.get("/proxy/health", (_req, res) => {
 // --------------------------------------------------------
 // start
 // --------------------------------------------------------
-app.listen(PORT, async () => {
+const listener = app.listen(PORT, async () => {
   console.log(`✅ Proxy running on port ${PORT}`);
   await buildCategoryGroups();
+});
+
+// ✅ Render에서 health check 감지용
+listener.on("listening", () => {
+  console.log("✅ Render ready: Server is listening on", PORT);
 });
