@@ -158,15 +158,36 @@ app.get("/proxy/refresh-groups", async (_req, res) => {
   try {
     await buildCategoryGroups();
 
+    // 먼저 응답 반환
     res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
 
-    // ✅ 캐시 무효화 (백그라운드)
-    fetch("https://cache-invalidator.hangaweeonline.workers.dev/?prefix=/proxy/directory", {
-      headers: { "x-api-key": process.env.INVALIDATE_KEY }
-    }).then(r => r.text()).then(t => console.log("🧹 Cache invalidation:", t))
-      .catch(err => console.warn("⚠️ Cache invalidation failed:", err.message));
+    // ✅ 캐시 무효화 (백그라운드 실행 + 상세 로그)
+    (async () => {
+      const invalidatorUrl =
+        process.env.CF_INVALIDATOR_URL ||
+        "https://cache-invalidator.hangaweeonline.workers.dev";
+      const key = process.env.INVALIDATE_KEY;
+
+      try {
+        const r = await fetch(`${invalidatorUrl}?prefix=/proxy/directory`, {
+          method: "GET",
+          headers: { "x-api-key": key },
+        });
+
+        const text = await r.text();
+
+        if (!r.ok) {
+          console.warn(`⚠️ Cache invalidation failed [${r.status}]: ${text}`);
+        } else {
+          console.log("🧹 Cache invalidation successful:", text);
+        }
+      } catch (err) {
+        console.warn("⚠️ Cache invalidation request error:", err.message);
+      }
+    })();
 
   } catch (e) {
+    console.error("❌ /proxy/refresh-groups error:", e);
     res.status(500).json({ error: e.message });
   }
 });
