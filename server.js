@@ -131,16 +131,19 @@ async function buildCategoryGroups() {
   for (const n of (data?.metaobjects?.nodes || [])) {
     const f = {};
     for (const x of (n.fields || [])) f[x.key] = x.value;
-    const group = (f.group || f.category_group || "Others").trim();
+
+    // ✅ slug 통일
+    const group = slug(f.group || f.category_group || "others");
     const name  = f.name || n.handle;
-    const handle = n.handle;
+    const handle = slug(n.handle);
+
     if (!groups[group]) groups[group] = [];
     groups[group].push({ name, handle });
   }
 
   categoryGroups = groups;
   fs.writeFileSync(CATEGORY_GROUPS_FILE, JSON.stringify(groups, null, 2));
-  console.log("✅ categoryGroups:", Object.keys(groups).length, "groups");
+  console.log("✅ categoryGroups built:", Object.keys(groups));
 }
 
 // --------------------------------------------------------
@@ -207,7 +210,7 @@ app.get("/proxy/directory", async (req, res) => {
   const page    = parseInt(req.query.page || "1", 10);
   const perPage = parseInt(req.query.perPage || "12", 10);
   const gParam  = slug(req.query.g || "");
-  const catHdl  = (req.query.category || "").trim();
+  const catHdl = slug(req.query.category || "");
   const q       = (req.query.q || "").trim().toLowerCase();
 
   try {
@@ -243,17 +246,23 @@ app.get("/proxy/directory", async (req, res) => {
       after = pi.endCursor;
     }
 
-    // Flatten fields
+    // 2) 평탄화 + 이미지 URL 보정
     const listings = [];
     for (const n of nodes) {
       const f = {};
       for (const ff of (n.fields || [])) {
-        f[ff.key] = extractFieldValue(ff);
-      }
-
-      // Flatten nested description if needed
-      if (typeof f.description === "object" && f.description.text) {
-        f.description = f.description.text;
+        if (ff.key === "image") {
+          f.image = ff.reference?.image?.url || ff.value || "";
+        } else if (ff.key === "category") {
+          // ✅ 카테고리 handle slug 처리
+          if (ff.reference?.handle) {
+            f.category_handle = slug(ff.reference.handle);
+          } else {
+            f.category_handle = slug(ff.value || "");
+          }
+        } else {
+          f[ff.key] = ff.value;
+        }
       }
 
       if (f.image && !/^https?:\/\//.test(f.image)) {
@@ -267,19 +276,13 @@ app.get("/proxy/directory", async (req, res) => {
         id: n.id,
         handle: n.handle,
         name: f.name || n.handle,
-        category: (f.category_handle || f.category || "").toString(),
+        category: f.category_handle || "",
         featured: isFeatured,
         image: f.image || "",
         address: f.address || "",
         description: f.description || "",
-        description_rich: f.description_rich || "",
         phone: f.phone || "",
-        email: f.email || "",
         website: f.website || "",
-        insta: f.insta || "",
-        facebook: f.facebook || "",
-        tiktok: f.tiktok || "",
-        youtube: f.youtube || f.youtube_url || f.youtube_handle || "",
         google_map: f.google_map || "",
         hours_mon: f.hours_mon || "",
         hours_tue: f.hours_tue || "",
