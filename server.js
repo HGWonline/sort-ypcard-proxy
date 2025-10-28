@@ -158,14 +158,11 @@ app.get("/proxy/refresh-groups", async (_req, res) => {
   try {
     await buildCategoryGroups();
 
-    // 먼저 응답 반환
     res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
 
     // ✅ 캐시 무효화 (백그라운드 실행 + 상세 로그)
     (async () => {
-      const invalidatorUrl =
-        process.env.CF_INVALIDATOR_URL ||
-        "https://cache-invalidator.hangaweeonline.workers.dev";
+      const invalidatorUrl = process.env.CF_INVALIDATOR_URL || "https://cache-invalidator.hangaweeonline.workers.dev";
       const key = process.env.INVALIDATE_KEY;
 
       try {
@@ -184,13 +181,14 @@ app.get("/proxy/refresh-groups", async (_req, res) => {
       } catch (err) {
         console.warn("⚠️ Cache invalidation request error:", err.message);
       }
-    })();
-
+    })(); // ✅ 즉시 실행 함수 닫기 (여기까지!)
+    
   } catch (e) {
     console.error("❌ /proxy/refresh-groups error:", e);
     res.status(500).json({ error: e.message });
   }
 });
+
 
 // --------------------------------------------------------
 // /proxy/directory  (필터 + 정렬 + 페이징)
