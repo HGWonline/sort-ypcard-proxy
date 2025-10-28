@@ -112,7 +112,7 @@ async function resolveMediaUrl(gidOrUrl) {
 }
 
 // --------------------------------------------------------
-// 카테고리 그룹 구성 (소문자 slug로 저장)
+// 카테고리 그룹 구성
 // --------------------------------------------------------
 async function buildCategoryGroups() {
   const query = `
@@ -131,9 +131,9 @@ async function buildCategoryGroups() {
   for (const n of (data?.metaobjects?.nodes || [])) {
     const f = {};
     for (const x of (n.fields || [])) f[x.key] = x.value;
-    const group = slug(f.group || f.category_group || "Others");
-    const name = f.name || n.handle;
-    const handle = slug(n.handle);
+    const group = (f.group || f.category_group || "Others").trim();
+    const name  = f.name || n.handle;
+    const handle = n.handle;
     if (!groups[group]) groups[group] = [];
     groups[group].push({ name, handle });
   }
@@ -151,14 +151,64 @@ app.get("/proxy/category-groups", (_req, res) => {
 });
 
 // --------------------------------------------------------
+// /proxy/refresh-groups
+// --------------------------------------------------------
+app.get("/proxy/refresh-groups", async (_req, res) => {
+  try {
+    await buildCategoryGroups();
+    res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
+
+    // ✅ 캐시 무효화 (백그라운드 실행 + 상세 로그)
+    (async () => {
+      const invalidatorUrl = process.env.CF_INVALIDATOR_URL || "https://cache-invalidator.hangaweeonline.workers.dev";
+      const key = process.env.INVALIDATE_KEY;
+      try {
+        const r = await fetch(`${invalidatorUrl}?prefix=/proxy/directory`, {
+          method: "GET",
+          headers: { "x-api-key": key },
+        });
+        const text = await r.text();
+        if (!r.ok) console.warn(`⚠️ Cache invalidation failed [${r.status}]: ${text}`);
+        else console.log("🧹 Cache invalidation successful:", text);
+      } catch (err) {
+        console.warn("⚠️ Cache invalidation request error:", err.message);
+      }
+    })();
+  } catch (e) {
+    console.error("❌ /proxy/refresh-groups error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --------------------------------------------------------
+// Helper: nested metaobject extractor
+// --------------------------------------------------------
+function extractFieldValue(ff) {
+  if (!ff) return "";
+  if (ff.value) return ff.value;
+  if (ff.reference) {
+    if (ff.reference.image?.url) return ff.reference.image.url;
+    if (ff.reference.type === "metaobject" && ff.reference.fields?.length) {
+      const inner = {};
+      for (const f2 of ff.reference.fields) {
+        inner[f2.key] = extractFieldValue(f2);
+      }
+      return inner;
+    }
+    if (ff.reference.handle) return ff.reference.handle;
+  }
+  return "";
+}
+
+// --------------------------------------------------------
 // /proxy/directory
 // --------------------------------------------------------
 app.get("/proxy/directory", async (req, res) => {
-  const page = parseInt(req.query.page || "1", 10);
+  const page    = parseInt(req.query.page || "1", 10);
   const perPage = parseInt(req.query.perPage || "12", 10);
-  const gParam = slug(req.query.g || ""); // ✅ 슬러그 강제
-  const catHdl = slug(req.query.category || ""); // ✅ 슬러그 강제
-  const q = (req.query.q || "").trim().toLowerCase();
+  const gParam  = (req.query.g || "").trim();
+  const catHdl  = (req.query.category || "").trim();
+  const q       = (req.query.q || "").trim().toLowerCase();
 
   try {
     const query = `
@@ -167,12 +217,13 @@ app.get("/proxy/directory", async (req, res) => {
           nodes {
             id
             handle
+            updatedAt
             fields {
               key
               value
               reference {
                 ... on MediaImage { id image { url } }
-                ... on Metaobject { handle type }
+                ... on Metaobject { handle type fields { key value reference { ... on Metaobject { fields { key value } } } } }
               }
             }
           }
@@ -180,6 +231,7 @@ app.get("/proxy/directory", async (req, res) => {
         }
       }
     `;
+
     const nodes = [];
     let after = null;
     let guard = 0;
@@ -191,34 +243,21 @@ app.get("/proxy/directory", async (req, res) => {
       after = pi.endCursor;
     }
 
+    // Flatten fields
     const listings = [];
     for (const n of nodes) {
       const f = {};
       for (const ff of (n.fields || [])) {
-        const key = ff.key;
-        let val = ff.value;
-
-        // reference 타입 처리
-        if (ff.reference) {
-          if (ff.reference.image?.url) {
-            val = ff.reference.image.url;
-          } else if (ff.reference.handle) {
-            val = ff.reference.handle;
-          }
-        }
-
-        // 저장
-        f[key] = val;
+        f[ff.key] = extractFieldValue(ff);
       }
 
-      // 이미지 별도 보정
+      // Flatten nested description if needed
+      if (typeof f.description === "object" && f.description.text) {
+        f.description = f.description.text;
+      }
+
       if (f.image && !/^https?:\/\//.test(f.image)) {
         f.image = await resolveMediaUrl(f.image);
-      }
-
-      // category handle 분리 저장
-      if (f.category && !f.category_handle) {
-        f.category_handle = f.category;
       }
 
       const featuredFlag = String(f.featured || "").toLowerCase();
@@ -228,37 +267,62 @@ app.get("/proxy/directory", async (req, res) => {
         id: n.id,
         handle: n.handle,
         name: f.name || n.handle,
-        category: slug(f.category_handle || f.category || ""), // ✅ 슬러그 저장
+        category: (f.category_handle || f.category || "").toString(),
         featured: isFeatured,
         image: f.image || "",
         address: f.address || "",
+        description: f.description || "",
+        description_rich: f.description_rich || "",
+        phone: f.phone || "",
+        email: f.email || "",
+        website: f.website || "",
+        insta: f.insta || "",
+        facebook: f.facebook || "",
+        tiktok: f.tiktok || "",
+        youtube: f.youtube || f.youtube_url || f.youtube_handle || "",
+        google_map: f.google_map || "",
+        hours_mon: f.hours_mon || "",
+        hours_tue: f.hours_tue || "",
+        hours_wed: f.hours_wed || "",
+        hours_thu: f.hours_thu || "",
+        hours_fri: f.hours_fri || "",
+        hours_sat: f.hours_sat || "",
+        hours_sun: f.hours_sun || "",
       });
     }
 
-    // ✅ 그룹 매칭 개선
+    // 그룹 필터
     let handlesInGroup = null;
     if (gParam) {
-      const key = Object.keys(categoryGroups || {}).find(
-        (k) => k === gParam || slug(k) === gParam
-      );
+      const gslug = slug(gParam);
+      const key = Object.keys(categoryGroups || {}).find(k => {
+        const s = slug(k);
+        return s === gslug || s.startsWith(gslug) || gslug.startsWith(s);
+      });
       if (key) {
-        handlesInGroup = (categoryGroups[key] || []).map((c) => slug(c.handle || ""));
+        handlesInGroup = (categoryGroups[key] || []).map(c => slug(c.handle || ""));
       }
     }
 
-    // 필터
     let filtered = listings;
-    if (handlesInGroup && handlesInGroup.length) {
-      filtered = filtered.filter((x) => handlesInGroup.includes(x.category));
+    if (handlesInGroup?.length) {
+      filtered = filtered.filter(x => x.category && handlesInGroup.includes(slug(x.category)));
     }
     if (catHdl) {
-      filtered = filtered.filter((x) => x.category === catHdl);
+      filtered = filtered.filter(x => slug(x.category) === slug(catHdl));
     }
     if (q) {
-      filtered = filtered.filter((x) =>
-        [x.name, x.address].join(" ").toLowerCase().includes(q)
-      );
+      filtered = filtered.filter(x => {
+        const bag = [x.name, x.address, x.website, x.insta, x.facebook, x.youtube, x.tiktok].join(" ").toLowerCase();
+        return bag.includes(q);
+      });
     }
+
+    filtered.sort((a, b) => {
+      if (a.featured && !b.featured) return -1;
+      if (!a.featured && b.featured) return 1;
+      return (a.name || "").localeCompare(b.name || "");
+    });
 
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -273,15 +337,21 @@ app.get("/proxy/directory", async (req, res) => {
 });
 
 // --------------------------------------------------------
+// health
+// --------------------------------------------------------
 app.get("/proxy/health", (_req, res) => {
   res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
 });
 
+// --------------------------------------------------------
+// start
+// --------------------------------------------------------
 const listener = app.listen(PORT, async () => {
   console.log(`✅ Proxy running on port ${PORT}`);
   await buildCategoryGroups();
 });
 
+// ✅ Render health check
 listener.on("listening", () => {
   console.log("✅ Render ready: Server is listening on", PORT);
 });
