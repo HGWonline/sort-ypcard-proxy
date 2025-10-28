@@ -206,7 +206,7 @@ function extractFieldValue(ff) {
 app.get("/proxy/directory", async (req, res) => {
   const page    = parseInt(req.query.page || "1", 10);
   const perPage = parseInt(req.query.perPage || "12", 10);
-  const gParam  = (req.query.g || "").trim();
+  const gParam  = slug(req.query.g || "");
   const catHdl  = (req.query.category || "").trim();
   const q       = (req.query.q || "").trim().toLowerCase();
 
