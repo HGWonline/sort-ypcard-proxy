@@ -24,23 +24,23 @@ app.use((req, res, next) => {
   next();
 });
 
-const SHOP_DOMAIN = process.env.SHOP_DOMAIN;                         // 예: hangaweemarket.com 또는 3abf38-d9.myshopify.com
-const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;         // 커스텀 앱 토큰
+const SHOP_DOMAIN = process.env.SHOP_DOMAIN;
+const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-10";
 const PORT = process.env.PORT || 3000;
 
 // --------------------------------------------------------
 // utils
 // --------------------------------------------------------
-const ensureDir = p => { if (!fs.existsSync(p)) fs.mkdirSync(p); };
+const ensureDir = (p) => { if (!fs.existsSync(p)) fs.mkdirSync(p); };
 const CACHE_DIR = "./cache";
 ensureDir(CACHE_DIR);
 
 const MEDIA_GID_FILE = path.join(CACHE_DIR, "mediaGidCache.json");
 const CATEGORY_GROUPS_FILE = path.join(CACHE_DIR, "categoryGroups.json");
 
-let mediaCache = {};     // gid -> url
-let categoryGroups = {}; // { "Retail & Shopping": [{name, handle}, ...], ... }
+let mediaCache = {};
+let categoryGroups = {};
 
 try {
   if (fs.existsSync(MEDIA_GID_FILE)) mediaCache = JSON.parse(fs.readFileSync(MEDIA_GID_FILE, "utf-8"));
@@ -49,12 +49,11 @@ try {
   console.warn("⚠️ cache load failed:", e.message);
 }
 
-// slug: 라벨/핸들 → 비교용 문자열
 function slug(s = "") {
   return String(s)
     .trim()
     .toLowerCase()
-    .replace(/&/g, "-")      // (& → -)   ※ 기존 데이터와 충돌 없도록 보수적으로
+    .replace(/&/g, "-")
     .replace(/\//g, "-")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
@@ -113,7 +112,7 @@ async function resolveMediaUrl(gidOrUrl) {
 }
 
 // --------------------------------------------------------
-// 카테고리 그룹 구성
+// 카테고리 그룹 구성 (소문자 slug로 저장)
 // --------------------------------------------------------
 async function buildCategoryGroups() {
   const query = `
@@ -132,9 +131,9 @@ async function buildCategoryGroups() {
   for (const n of (data?.metaobjects?.nodes || [])) {
     const f = {};
     for (const x of (n.fields || [])) f[x.key] = x.value;
-    const group = (f.group || f.category_group || "Others").trim();
-    const name  = f.name || n.handle;
-    const handle = n.handle;
+    const group = slug(f.group || f.category_group || "Others");
+    const name = f.name || n.handle;
+    const handle = slug(n.handle);
     if (!groups[group]) groups[group] = [];
     groups[group].push({ name, handle });
   }
@@ -145,71 +144,29 @@ async function buildCategoryGroups() {
 }
 
 // --------------------------------------------------------
-// /proxy/category-groups  (하위 카테고리 버튼용)
+// /proxy/category-groups
 // --------------------------------------------------------
 app.get("/proxy/category-groups", (_req, res) => {
   res.json(categoryGroups || {});
 });
 
 // --------------------------------------------------------
-// /proxy/refresh-groups (임시 리프레시)
-// --------------------------------------------------------
-app.get("/proxy/refresh-groups", async (_req, res) => {
-  try {
-    await buildCategoryGroups();
-
-    res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
-
-    // ✅ 캐시 무효화 (백그라운드 실행 + 상세 로그)
-    (async () => {
-      const invalidatorUrl = process.env.CF_INVALIDATOR_URL || "https://cache-invalidator.hangaweeonline.workers.dev";
-      const key = process.env.INVALIDATE_KEY;
-
-      try {
-        const r = await fetch(`${invalidatorUrl}?prefix=/proxy/directory`, {
-          method: "GET",
-          headers: { "x-api-key": key },
-        });
-
-        const text = await r.text();
-
-        if (!r.ok) {
-          console.warn(`⚠️ Cache invalidation failed [${r.status}]: ${text}`);
-        } else {
-          console.log("🧹 Cache invalidation successful:", text);
-        }
-      } catch (err) {
-        console.warn("⚠️ Cache invalidation request error:", err.message);
-      }
-    })(); // ✅ 즉시 실행 함수 닫기 (여기까지!)
-    
-  } catch (e) {
-    console.error("❌ /proxy/refresh-groups error:", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-// --------------------------------------------------------
-// /proxy/directory  (필터 + 정렬 + 페이징)
-//   ?g=메인그룹(라벨/슬러그 자유) &category=서브카테고리 핸들 &q=검색어 &page &perPage
+// /proxy/directory
 // --------------------------------------------------------
 app.get("/proxy/directory", async (req, res) => {
-  const page    = parseInt(req.query.page || "1", 10);
+  const page = parseInt(req.query.page || "1", 10);
   const perPage = parseInt(req.query.perPage || "12", 10);
-  const gParam  = (req.query.g || "").trim();
-  const catHdl  = (req.query.category || "").trim();
-  const q       = (req.query.q || "").trim().toLowerCase();
+  const gParam = slug(req.query.g || ""); // ✅ 슬러그 강제
+  const catHdl = slug(req.query.category || ""); // ✅ 슬러그 강제
+  const q = (req.query.q || "").trim().toLowerCase();
 
   try {
-    // 1) 전체 listing 가져오기
     const query = `
       query GetListings($after: String) {
         metaobjects(type: "directory_listing", first: 250, after: $after) {
           nodes {
             id
             handle
-            updatedAt
             fields {
               key
               value
@@ -223,7 +180,6 @@ app.get("/proxy/directory", async (req, res) => {
         }
       }
     `;
-
     const nodes = [];
     let after = null;
     let guard = 0;
@@ -235,7 +191,6 @@ app.get("/proxy/directory", async (req, res) => {
       after = pi.endCursor;
     }
 
-    // 2) 평탄화 + 이미지 URL 보정
     const listings = [];
     for (const n of nodes) {
       const f = {};
@@ -251,7 +206,7 @@ app.get("/proxy/directory", async (req, res) => {
       }
 
       if (f.image && !/^https?:\/\//.test(f.image)) {
-        f.image = await resolveMediaUrl(f.image); // GID 처리
+        f.image = await resolveMediaUrl(f.image);
       }
 
       const featuredFlag = String(f.featured || "").toLowerCase();
@@ -261,74 +216,43 @@ app.get("/proxy/directory", async (req, res) => {
         id: n.id,
         handle: n.handle,
         name: f.name || n.handle,
-        category: (f.category_handle || f.category || "").toString(),
+        category: slug(f.category_handle || f.category || ""), // ✅ 슬러그 저장
         featured: isFeatured,
         image: f.image || "",
         address: f.address || "",
-        description: f.description || "",
-        description_rich: f.description_rich || "",
-        phone: f.phone || "",
-        email: f.email || "",
-        website: f.website || "",
-        insta: f.insta || "",
-        facebook: f.facebook || "",
-        tiktok: f.tiktok || "",
-        youtube: f.youtube || f.youtube_url || f.youtube_handle || "",
-        google_map: f.google_map || "",
-        hours_mon: f.hours_mon || "",
-        hours_tue: f.hours_tue || "",
-        hours_wed: f.hours_wed || "",
-        hours_thu: f.hours_thu || "",
-        hours_fri: f.hours_fri || "",
-        hours_sat: f.hours_sat || "",
-        hours_sun: f.hours_sun || "",
       });
     }
 
-    // 3) 메인 그룹(g) → 서브카테고리 핸들 목록
+    // ✅ 그룹 매칭 개선
     let handlesInGroup = null;
     if (gParam) {
-      const gslug = slug(gParam);
-      const key = Object.keys(categoryGroups || {}).find(k => {
-        const s = slug(k);
-        // 완전일치 + 일부시작(양방향) 허용 → pro-logistics ↔ professional-logistics
-        return s === gslug || s.startsWith(gslug) || gslug.startsWith(s);
-      });
+      const key = Object.keys(categoryGroups || {}).find(
+        (k) => k === gParam || slug(k) === gParam
+      );
       if (key) {
-        handlesInGroup = (categoryGroups[key] || []).map(c => slug(c.handle || ""));
+        handlesInGroup = (categoryGroups[key] || []).map((c) => slug(c.handle || ""));
       }
     }
 
-    // 4) 필터
+    // 필터
     let filtered = listings;
-
     if (handlesInGroup && handlesInGroup.length) {
-      filtered = filtered.filter(x => x.category && handlesInGroup.includes(slug(x.category)));
+      filtered = filtered.filter((x) => handlesInGroup.includes(x.category));
     }
     if (catHdl) {
-      filtered = filtered.filter(x => slug(x.category) === slug(catHdl));
+      filtered = filtered.filter((x) => x.category === catHdl);
     }
     if (q) {
-      filtered = filtered.filter(x => {
-        const bag = [x.name, x.address, x.website, x.insta, x.facebook, x.youtube, x.tiktok].join(" ").toLowerCase();
-        return bag.includes(q);
-      });
+      filtered = filtered.filter((x) =>
+        [x.name, x.address].join(" ").toLowerCase().includes(q)
+      );
     }
 
-    // 5) 정렬
-    filtered.sort((a, b) => {
-      if (a.featured && !b.featured) return -1;
-      if (!a.featured && b.featured) return 1;
-      return (a.name || "").localeCompare(b.name || "");
-    });
-
-    // 6) 페이징
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const start = (page - 1) * perPage;
     const items = filtered.slice(start, start + perPage);
 
-    // 7) 응답
     res.json({ total, totalPages, page, perPage, items });
   } catch (e) {
     console.error("❌ /proxy/directory error:", e);
@@ -337,21 +261,15 @@ app.get("/proxy/directory", async (req, res) => {
 });
 
 // --------------------------------------------------------
-// health
-// --------------------------------------------------------
 app.get("/proxy/health", (_req, res) => {
   res.json({ ok: true, groups: Object.keys(categoryGroups || {}).length });
 });
 
-// --------------------------------------------------------
-// start
-// --------------------------------------------------------
 const listener = app.listen(PORT, async () => {
   console.log(`✅ Proxy running on port ${PORT}`);
   await buildCategoryGroups();
 });
 
-// ✅ Render에서 health check 감지용
 listener.on("listening", () => {
   console.log("✅ Render ready: Server is listening on", PORT);
 });
