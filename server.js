@@ -195,18 +195,30 @@ app.get("/proxy/directory", async (req, res) => {
     for (const n of nodes) {
       const f = {};
       for (const ff of (n.fields || [])) {
-        if (ff.key === "image") {
-          f.image = ff.reference?.image?.url || ff.value || "";
-        } else {
-          f[ff.key] = ff.value;
+        const key = ff.key;
+        let val = ff.value;
+
+        // reference 타입 처리
+        if (ff.reference) {
+          if (ff.reference.image?.url) {
+            val = ff.reference.image.url;
+          } else if (ff.reference.handle) {
+            val = ff.reference.handle;
+          }
         }
-        if (ff.key === "category" && ff.reference?.handle) {
-          f.category_handle = ff.reference.handle;
-        }
+
+        // 저장
+        f[key] = val;
       }
 
+      // 이미지 별도 보정
       if (f.image && !/^https?:\/\//.test(f.image)) {
         f.image = await resolveMediaUrl(f.image);
+      }
+
+      // category handle 분리 저장
+      if (f.category && !f.category_handle) {
+        f.category_handle = f.category;
       }
 
       const featuredFlag = String(f.featured || "").toLowerCase();
