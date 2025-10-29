@@ -204,13 +204,13 @@ function extractFieldValue(ff) {
 }
 
 // --------------------------------------------------------
-// /proxy/directory
+// /proxy/directory (수정된 버전)
 // --------------------------------------------------------
 app.get("/proxy/directory", async (req, res) => {
   const page    = parseInt(req.query.page || "1", 10);
   const perPage = parseInt(req.query.perPage || "12", 10);
   const gParam  = slug(req.query.g || "");
-  const catHdl = slug(req.query.category || "");
+  const catHdl  = slug(req.query.category || "");
   const q       = (req.query.q || "").trim().toLowerCase();
 
   try {
@@ -246,22 +246,26 @@ app.get("/proxy/directory", async (req, res) => {
       after = pi.endCursor;
     }
 
-    // 2) 평탄화 + 이미지 URL 보정
     const listings = [];
     for (const n of nodes) {
       const f = {};
       for (const ff of (n.fields || [])) {
+        // ✅ image 보정
         if (ff.key === "image") {
           f.image = ff.reference?.image?.url || ff.value || "";
-        } else if (ff.key === "category") {
-          // ✅ 카테고리 handle slug 처리
-          if (ff.reference?.handle) {
-            f.category_handle = slug(ff.reference.handle);
-          } else {
-            f.category_handle = slug(ff.value || "");
-          }
-        } else {
-          f[ff.key] = ff.value;
+        }
+        // ✅ category slug 보정
+        else if (ff.key === "category") {
+          if (ff.reference?.handle) f.category_handle = slug(ff.reference.handle);
+          else f.category_handle = slug(ff.value || "");
+        }
+        // ✅ booking_url / order_url reference 지원
+        else if (ff.key === "booking_url" || ff.key === "order_url") {
+          f[ff.key] = extractFieldValue(ff);
+        }
+        // ✅ 일반 필드
+        else {
+          f[ff.key] = extractFieldValue(ff);
         }
       }
 
@@ -276,7 +280,7 @@ app.get("/proxy/directory", async (req, res) => {
         id: n.id,
         handle: n.handle,
         name: f.name || n.handle,
-        category: (f.category_handle || f.category || "").toString(),
+        category: f.category_handle || f.category || "",
         featured: isFeatured,
         image: f.image || "",
         address: f.address || "",
@@ -290,6 +294,8 @@ app.get("/proxy/directory", async (req, res) => {
         tiktok: f.tiktok || "",
         youtube: f.youtube || f.youtube_url || f.youtube_handle || "",
         google_map: f.google_map || "",
+        booking_url: f.booking_url || f.booking || f.reserve_url || "",
+        order_url: f.order_url || f.order || f.order_link || "",
         hours_mon: f.hours_mon || "",
         hours_tue: f.hours_tue || "",
         hours_wed: f.hours_wed || "",
@@ -300,7 +306,7 @@ app.get("/proxy/directory", async (req, res) => {
       });
     }
 
-    // 그룹 필터
+    // ===== 그룹 필터 =====
     let handlesInGroup = null;
     if (gParam) {
       const gslug = slug(gParam);
@@ -308,9 +314,7 @@ app.get("/proxy/directory", async (req, res) => {
         const s = slug(k);
         return s === gslug || s.startsWith(gslug) || gslug.startsWith(s);
       });
-      if (key) {
-        handlesInGroup = (categoryGroups[key] || []).map(c => slug(c.handle || ""));
-      }
+      if (key) handlesInGroup = (categoryGroups[key] || []).map(c => slug(c.handle || ""));
     }
 
     let filtered = listings;
