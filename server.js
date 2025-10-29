@@ -294,6 +294,7 @@ app.get("/proxy/directory", async (req, res) => {
         tiktok: f.tiktok || "",
         youtube: f.youtube || f.youtube_url || f.youtube_handle || "",
         google_map: f.google_map || "",
+        menu_url: f.menu_url || "",
         booking_url: f.booking_url || f.booking || f.reserve_url || "",
         order_url: f.order_url || f.order || f.order_link || "",
         hours_mon: f.hours_mon || "",
