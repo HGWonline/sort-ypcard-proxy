@@ -339,12 +339,11 @@ app.get("/proxy/directory", async (req, res) => {
     });
 
     const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    const start = (page - 1) * perPage;
+    const items = filtered.slice(start, start + perPage);
 
-    res.json({
-      total,
-      items: filtered
-    });
-
+    res.json({ total, totalPages, page, perPage, items });
   } catch (e) {
     console.error("❌ /proxy/directory error:", e);
     res.status(500).json({ error: e.message || String(e) });
