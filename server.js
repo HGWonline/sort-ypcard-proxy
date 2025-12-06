@@ -207,8 +207,6 @@ function extractFieldValue(ff) {
 // /proxy/directory (수정된 버전)
 // --------------------------------------------------------
 app.get("/proxy/directory", async (req, res) => {
-  const page    = parseInt(req.query.page || "1", 10);
-  const perPage = parseInt(req.query.perPage || "12", 10);
   const gParam  = slug(req.query.g || "");
   const catHdl  = slug(req.query.category || "");
   const q       = (req.query.q || "").trim().toLowerCase();
@@ -338,12 +336,13 @@ app.get("/proxy/directory", async (req, res) => {
       return (a.name || "").localeCompare(b.name || "");
     });
 
+    // pagination 제거 — 전체 결과 반환
     const total = filtered.length;
-    const totalPages = Math.max(1, Math.ceil(total / perPage));
-    const start = (page - 1) * perPage;
-    const items = filtered.slice(start, start + perPage);
 
-    res.json({ total, totalPages, page, perPage, items });
+    res.json({
+      total,
+      items: filtered     // 전체 리스트 반환
+    });
   } catch (e) {
     console.error("❌ /proxy/directory error:", e);
     res.status(500).json({ error: e.message || String(e) });
